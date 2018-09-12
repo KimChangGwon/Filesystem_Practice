@@ -11,6 +11,8 @@ void attr_FILENAME(AttrFILENAME* filename, char * fin);
 void attr_STD_INFO(AttrSTDINFO * stdInfo);
 void attr_ATTR_LIST(ListEntry * pEntry, U32 AttrLen);
 void get_BPB_info(NTFS_BPB * boot, VolStruct * gVol);
+void convert_order(U64 & time);
+U64 windowsTime(U64 time);
 
 int main(int argc, char ** argv) {
 
@@ -27,12 +29,13 @@ int main(int argc, char ** argv) {
 	if ((gVol.VolBeginSec = EFI_Sector_Finder(argv[1])) == 0) {
 		fprintf(stderr, "File System doesn't exist");
 	}
+
 	if ((HDD_read(gVol.Drive, gVol.VolBeginSec * 512, 1, (U8*)&boot)) == 0) {
 		fprintf(stderr, "Boot Sector Read Failed \n");
 		return 1;
 	}
-	get_BPB_info(&boot, &gVol);
 
+	get_BPB_info(&boot, &gVol);
 	get_MFTEntry(1, &mft);
 	show_mft(mft);
 	show_attr(mft);
@@ -41,9 +44,8 @@ int main(int argc, char ** argv) {
 }
 
 int get_MFTEntry(int MFTNum, MFTEntry * curMFTEntry) {
-	int readSec = gVol.MFTStartSec + (MFTNum * 2);
-	printf("gvol.MFTStartSec : %d\n", gVol.MFTStartSec);
-	if (HDD_read(gVol.Drive, readSec, 2, (U8*)curMFTEntry) == 0) {
+	U64 readSec = gVol.MFTStartSec + (MFTNum * 2);
+	if (HDD_read(gVol.Drive, readSec * 512, 1, (U8*)curMFTEntry) == 0) {
 		printf("MFT Read Failed\n");
 		exit(1);
 	}
@@ -57,17 +59,30 @@ void show_mft(MFTEntry mft) {
 	printf("Sequence Value = %d\n", mft.Header.SequenceValue);
 	printf("Link Count = %d\n", mft.Header.LinkCnt);
 	printf("First Attr Offset = %d\n", mft.Header.AddrFirstArr);
-	printf("Flags %x\n", mft.Header.Flags);
+	printf("Flags = %x\n", mft.Header.Flags);
 	printf("Used Size of MFT = %d\n", mft.Header.UsedSizeOfEntry);
-	printf("Alloc size of MT = %d\n", mft.Header.AllocSizeOfEntry);
+	printf("Alloc size of MFT = %d\n", mft.Header.AllocSizeOfEntry);
 	printf("File Referrence to base record = %d\n", mft.Header.FileRefer);
 	printf("Next Attr ID = %d\n", mft.Header.NextAttrID);
+}
+
+void convert_order(U64 & time) {
+	U64 converted_time = 0;
+	for (int a = 0; a < 64; a = a + 8) {
+		converted_time |= ((time >> a) & 0xFF) << (56 - a);
+	}
+}
+
+U64 windowsTime(U64 time) {
+	convert_order(time);
+
 }
 
 void show_attr(MFTEntry mft) {
 	int offset = mft.Header.AddrFirstArr;
 	void * pAttr;
 	AttrHeader * header = (AttrHeader *)&mft.Data[offset];
+
 	do {
 		if (header->non_resident_flag == 0) {
 			pAttr = &mft.Data[offset + header->Res.AttrOffset];
@@ -86,6 +101,8 @@ void show_attr(MFTEntry mft) {
 		else if (header->AttrTypeID == 16) {
 			attr_STD_INFO((AttrSTDINFO*)pAttr);
 		}
+		offset = offset + header->Length;
+		header = (AttrHeader*)&mft.Data[offset];
 	} while (header->AttrTypeID != -1);
  }
 
@@ -106,10 +123,10 @@ void attr_ATTR_LIST(ListEntry*pEntry, U32 AttrLen) {
 
 void attr_STD_INFO(AttrSTDINFO* stdInfo) {
 	printf("---- STD INFO ATTR ----\n");
-	printf("Created time = %I64d\n", stdInfo->CreateTime);
-	printf("Modified time = %I64d\n", stdInfo->ModifiedTime);
-	printf("MFT Modified time = %I64d\n", stdInfo->MFTmodifiedTime);
-	printf("Accessd time = %I64d\n", stdInfo->AccessTime);
+	printf("Created time = %I64d\n", windowsTime(stdInfo->CreateTime));
+	printf("Modified time = %I64d\n", windowsTime(stdInfo->ModifiedTime));
+	printf("MFT Modified time = %I64d\n", windowsTime(stdInfo->MFTmodifiedTime));
+	printf("Accessd time = %I64d\n", windowsTime(stdInfo->AccessTime));
 	printf("Flag = %x\n", stdInfo->Flags);
 }
 
