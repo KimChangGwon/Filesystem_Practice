@@ -76,6 +76,7 @@ void convert_order(U64 & time) {
 U64 windowsTime(U64 time) {
 	convert_order(time);
 
+	return time;
 }
 
 void show_attr(MFTEntry mft) {
@@ -101,6 +102,7 @@ void show_attr(MFTEntry mft) {
 		else if (header->AttrTypeID == 16) {
 			attr_STD_INFO((AttrSTDINFO*)pAttr);
 		}
+
 		offset = offset + header->Length;
 		header = (AttrHeader*)&mft.Data[offset];
 	} while (header->AttrTypeID != -1);
@@ -121,9 +123,9 @@ void attr_ATTR_LIST(ListEntry*pEntry, U32 AttrLen) {
 	}	while (offset < AttrLen);
 }
 
-void attr_STD_INFO(AttrSTDINFO* stdInfo) {
+void attr_STD_INFO(AttrSTDINFO * stdInfo) {
 	printf("---- STD INFO ATTR ----\n");
-	printf("Created time = %I64d\n", windowsTime(stdInfo->CreateTime));
+	printf("Created time = %I64X\n", windowsTime(stdInfo->CreateTime));
 	printf("Modified time = %I64d\n", windowsTime(stdInfo->ModifiedTime));
 	printf("MFT Modified time = %I64d\n", windowsTime(stdInfo->MFTmodifiedTime));
 	printf("Accessd time = %I64d\n", windowsTime(stdInfo->AccessTime));
