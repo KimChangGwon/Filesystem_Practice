@@ -11,8 +11,8 @@ void attr_ATTR_LIST(ListEntry * pEntry, U32 AttrLen);
 void get_BPB_info(NTFS_BPB * boot, VolStruct * gVol);
 void Input_Parser(char * input);
 void ChangeFixupData(U16 * data, U32 ArrayOffset, U32 ArrayCnt, U32 Size);
-void read_file(MFTEntry ft, U32 read_size, char * read_buf);
-U32 find_file(U32 MFTNum, char * filename, MFTEntry * findMft);
+void read_file(MFTEntry ft, U32 read_size, U8 * read_buf);
+S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMft);
 void get_RunList(U8 * data, RunData * runData);
 S32 readCluster(U64 vcn, U32 ClusCnt, RunData * runData, U8 * buf);
 void * getAttr(U32 AttrNum, MFTEntry * mft);
@@ -31,7 +31,7 @@ int main(int argc, char ** argv) {
 	NTFS_BPB boot;
 	MFTEntry mft;
 	char filename[128];
-	char buf[4096] = { 0 };
+	U8 buf[4096] = { 0 };
 
 	gVol.Drive = 0x00;
 
@@ -53,6 +53,56 @@ int main(int argc, char ** argv) {
 
 
 	return 0;
+}
+
+void read_file(MFTEntry mft, U32 read_size, U8 * read_buf) {
+	RunData runData[MAX_CLUS_RUN] = { 0 };
+	U32 ClusCnt;
+
+	ClusCnt = (read_size + gVol.ClusSize - 1) / gVol.ClusSize;
+
+	get_RunList((U8*)getAttr(128, &mft), runData);
+	readCluster(0, ClusCnt, runData, read_buf);
+
+	return;
+}
+
+void * getAttr(U32 AttrNum, MFTEntry* mft) {
+	AttrHeader * header;
+	U32 offset;
+	void * pAttr;
+
+	offset = mft->Header.AddrFirstArr;
+	header = (AttrHeader*)&mft->Data[offset];
+
+	do {
+		if (header->non_resident_flag == 0) pAttr = &mft->Data[offset + header->Res.AttrOffset];
+		else pAttr = &mft->Data[offset + header->NonRes.RunListOffset];
+
+		if (header->AttrTypeID == AttrNum) return pAttr;
+
+		offset = offset + header->Length;
+		header = (AttrHeader*)&mft->Data[offset];
+	} while (header->AttrTypeID != -1);
+}
+
+S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMFT) {
+	MFTEntry mft;
+	RunData runData[MAX_CLUS_RUN] = { 0 };
+	U8 IndexRecord[4096];
+	U64 child_vcn;
+	U32 IndexRecordClusSize;
+	U64 ret;
+
+	AttrINDEX_ROOT * pRoot;
+	INDEX_RECORD_HEADER * pIndexRecHeader;
+
+	ChangetoUpper(filename);
+
+	get_MFTEntry(MFTNum, &mft);
+
+	pRoot = (AttrINDEX_ROOT*)getAttr(144, &mft);
+	IndexRecordClusSize = pRoot->IndexRecordClusSize;
 }
 
 int get_MFTEntry(int MFTNum, MFTEntry * curMFTEntry) {
