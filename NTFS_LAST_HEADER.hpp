@@ -18,11 +18,12 @@
 #define U32 unsigned int
 #define U64 unsigned __int64
 #define S32 int
+#define MAX_CLUS_RUN 4096
 
 #pragma pack(1)
 typedef struct __Attr_INDEX_ROOT {
 	U32 AttrType;
-	U32 CollationRule;
+	U32 CollationRule; // 해당 인덱스가 담고 있는 형식 (0x00 : Binary, 0x01 File Name, 0x02 Unicode string, 0x10 Unsigned Long ...)
 	U32 IndexRecorSize;
 	U8 IndexRecordClusSize;
 	U8 Padding[3];
@@ -35,8 +36,8 @@ typedef struct __INDEX_RECORD_HEADER {
 	U16 AddrFixUpArray;
 	U16 CountFixUpArray;
 	U64 LSN;
-	U64 ThisIndexVCN :
-} INDEX_RECORD_HEADER;
+	U64 ThisIndexVCN;
+}INDEX_RECORD_HEADER;
 #pragma pack()
 
 #pragma pack(1)
@@ -213,161 +214,5 @@ typedef struct _VOL_struct {
 	U32 SizeOfIndexRecord;
 }VolStruct;
 
-U64 EFI_Sector_Finder(char * FileSystem);
-U32 HDD_read(U8 drv, U64 SecAddr, U32 blocks, U8 * buf);
-void Input_Parser(char * input);
 
-U32 HDD_write(U8 drv, U32 SecAddr, U32 blocks, U8 * buf) {
-	_wsetlocale(LC_ALL, L"koeran");
-	U32 ret = 0;
-	U32 ldistanceLow, ldistanceHigh, dwpointer, bytestoread, numread;
 
-	char cur_drv[100];
-	HANDLE g_hDevice;
-
-	sprintf(cur_drv, "E:");
-	g_hDevice = CreateFile(cur_drv, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-
-	if (g_hDevice == INVALID_HANDLE_VALUE) return 0;
-
-	ldistanceLow = SecAddr;
-	ldistanceHigh = SecAddr >> (32 - 9);
-	dwpointer = SetFilePointer(g_hDevice, ldistanceLow, (long*)&ldistanceHigh, FILE_BEGIN);
-
-	if (dwpointer != 0xFFFFFFFF) {
-		bytestoread = blocks * 512;
-		ret = WriteFile(g_hDevice, buf, bytestoread, (unsigned long*)&numread, NULL);
-
-		if (ret) ret = 1;
-		else ret = 0;
-	}
-
-	CloseHandle(g_hDevice);
-	return ret;
-}
-
-U32 HDD_read(U8 drv, U64 SecAddr, U32 blocks, U8 * buf) {
-	U32 ret;
-	U32 ldistanceLow, ldistanceHigh, dwpointer, bytestoread, numread;
-	U8 * cur_path = (U8*)malloc(200);
-	char cur_drv[100];
-	HANDLE g_hDevice;
-
-	sprintf(cur_drv, "\\\\.\\PhysicalDrive%d", (U32)drv);
-	g_hDevice = CreateFile(cur_drv, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
-	if (g_hDevice == INVALID_HANDLE_VALUE) {
-		puts("INVALID HANDLE");
-		return 0;
-	}
-
-	ldistanceLow = SecAddr & (0xFFFFFFFF);
-	ldistanceHigh = SecAddr >> 32;
-	dwpointer = SetFilePointer(g_hDevice, ldistanceLow, (long*)&ldistanceHigh, FILE_BEGIN);
-
-	if (dwpointer != 0xFFFFFFFF) {
-		bytestoread = blocks * 512;
-		ret = ReadFile(g_hDevice, buf, bytestoread, (unsigned long*)&numread, NULL);
-
-		if (ret) ret = 1;
-		else ret = 0;
-	}
-	else {
-		puts("File open Fail");
-		ret = 0;
-	}
-	CloseHandle(g_hDevice);
-	return ret;
-}
-
-void HexDump(U8 * addr, U32 len) {
-	U8 *s = addr, *endPtr = (U8*)((U32)addr + len);
-	U32 i, remainder = len % 16;
-
-	printf("\nOffset       Hex Value	                                      Ascii value \n");
-
-	while (s + 16 <= endPtr) {
-
-		printf("0x%08lx   ", (long)(s - addr));
-
-		for (i = 0; i < 16; i++) printf("%02x ", s[i]);
-
-		printf(" ");
-
-		for (i = 0; i < 16; i++) {
-			if (s[i] >= 32 && s[i] <= 125) printf("%c", s[i]);
-			else printf(".");
-		}
-
-		s += 16;
-		printf("\n");
-	}
-
-	if (remainder) {
-		printf("0x%08lx   ", (long)(s - addr));
-
-		for (i = 0; i < remainder; i++) printf("%02x ", s[i]);
-
-		for (i = 0; i < (16 - remainder); i++) printf("     ");
-
-		printf(" ");
-
-		for (i = 0; i < remainder; i++) {
-			if (s[i] >= 32 && s[i] <= 125) printf("%c", s[i]);
-			else printf(".");
-		}
-
-		for (i = 0; i < (16 - remainder); i++) printf(" ");
-	}
-
-	return;
-}
-
-void Input_Parser(char * input) {
-	char * temp = (char*)malloc(sizeof(char) * 8);
-	memset(temp, 0x20, sizeof(char) * 8);
-	memcpy(temp, input, strlen(input));
-	memcpy(input, temp, sizeof(char) * 8);
-}
-
-/*
-EFI_Sector_Finder
-This function receives a FileSystem name from user's command line
-then, parses the input to 8 bytes FS name for being used to find the offset 'sector number' from GPT structure.
-returns a sector number of FS BR sector number.
-the Sector number is used in HDD_read function to have a sector that contains 'filesystem boot record'
-*/
-
-U64 EFI_Sector_Finder(char * FileSystem)
-{
-	U64 ret = 0;
-	U8 Entry_Buf[1024];
-	bool pass = true;
-	memset(Entry_Buf, 0, sizeof(U8) * 1024);
-	Input_Parser(FileSystem);
-
-	if (!HDD_read(0, (U64)1024, 2, Entry_Buf)) {
-		printf("Cannot read EFI_Entry Header");
-		exit(0);
-	}
-
-	for (int i = 0; i < 8; i++) {
-		U8 tmp_Buf[128];
-		char VBR[512];
-		memset(tmp_Buf, 0, sizeof(U8) * 128);
-		memcpy(tmp_Buf, Entry_Buf + (i * 128), sizeof(U8) * 128);
-		if (tmp_Buf[0] == 0x00) return ret;
-
-		U64 offset = ((U64)tmp_Buf[35] * 16777216 + (U64)tmp_Buf[34] * 65536 + (U64)tmp_Buf[33] * 256 + (U64)tmp_Buf[32]);
-		HDD_read(0, offset * 512, 1, (unsigned char*)VBR);
-		if (!strncmp(VBR + 3, FileSystem, 8)) {
-			if (!strncmp(FileSystem, "NTFS", 4) && pass) {
-				pass = false;
-				continue;
-			}
-			ret = offset;
-			break;
-		}
-	}
-
-	return ret;
-}

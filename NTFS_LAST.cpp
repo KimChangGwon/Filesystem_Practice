@@ -10,9 +10,10 @@ void attr_STD_INFO(AttrSTDINFO * stdInfo);
 void attr_ATTR_LIST(ListEntry * pEntry, U32 AttrLen);
 void get_BPB_info(NTFS_BPB * boot, VolStruct * gVol);
 void Input_Parser(char * input);
-void ChangeFixupData(U16 * data, U32 ArrayOffset, U32 ArrayCnt, U32 Size);
+//void ChangeFixupData(U16 * data, U32 ArrayOffset, U32 ArrayCnt, U32 Size);
 void read_file(MFTEntry ft, U32 read_size, U8 * read_buf);
 S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMft);
+U64 fileFile_inNode(U8* p, U64 * child_vcn, char * filename);
 void get_RunList(U8 * data, RunData * runData);
 S32 readCluster(U64 vcn, U32 ClusCnt, RunData * runData, U8 * buf);
 void * getAttr(U32 AttrNum, MFTEntry * mft);
@@ -86,7 +87,7 @@ void * getAttr(U32 AttrNum, MFTEntry* mft) {
 	} while (header->AttrTypeID != -1);
 }
 
-S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMFT) {
+S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMft) {
 	MFTEntry mft;
 	RunData runData[MAX_CLUS_RUN] = { 0 };
 	U8 IndexRecord[4096];
@@ -103,6 +104,171 @@ S32 find_file(U32 MFTNum, char * filename, MFTEntry * findMFT) {
 
 	pRoot = (AttrINDEX_ROOT*)getAttr(144, &mft);
 	IndexRecordClusSize = pRoot->IndexRecordClusSize;
+
+	ret = fileFile_inNode((U8*)pRoot + sizeof(AttrINDEX_ROOT), &child_vcn, filename);
+
+	if (ret == 0) return 0;
+	else if (ret > 1) {
+		get_MFTEntry(ret, findMft);
+
+		return 1;
+	}
+
+	get_RunList((U8*)getAttr(160, &mft), runData);
+
+	do {
+		readCluster(child_vcn, IndexRecordClusSize, runData, IndexRecord);
+
+		pIndexRecHeader = (INDEX_RECORD_HEADER*)IndexRecord;
+
+		ret = fileFile_inNode((U8*)IndexRecord + sizeof(INDEX_RECORD_HEADER), &child_vcn, filename);
+
+		switch (ret) {
+		case 0:
+			return 0;
+		case 1:
+			break;
+		default:
+			get_MFTEntry(ret, findMft);
+
+			return 1;
+		}
+	} while (1);
+
+	return 0;
+}
+
+U64 fileFile_inNode(U8* p, U64 * child_vcn, char * filename) {
+	NodeHeader * pNode;
+	IndexEntry * pEntry;
+	AttrFILENAME * pAttrName;
+	char fin[512] = { 0, };
+
+	pNode = (NodeHeader*)p;
+	pEntry = (IndexEntry*)((char*)pNode + pNode->AddrFirstIndex);
+
+	while (1) {
+		if (pEntry->Header.Flags & 0x02) {
+			if(pEntry->Header.Flags & 0x01) {
+				*child_vcn = *((U64*)&pEntry->Data[pEntry->Header.LenOfEntry - 8]);
+				return 1;
+			}
+			else return 0;
+		}
+		pAttrName = (AttrFILENAME*)&pEntry->Data[16];
+		wcstombs(fin, &pAttrName->FileName, pAttrName->LenOfName);
+		fin[pAttrName->LenOfName] = 0;
+
+		ChangetoUpper(fin);
+
+		if (strcmp(fin, filename) > 0) {
+			if (pEntry->Header.Flags & 0x01) {
+				*child_vcn = *((U64*)&pEntry->Data[pEntry->Header.LenOfEntry - 8]);
+				return 1;
+			}
+		}
+		else {
+			return 0;
+		}
+
+		if (!strcmp(filename, fin)) return (pEntry->Header.FileReferrence & 0x0000FFFFFFFFFFFF);
+
+		pEntry = (IndexEntry*)((char*)pEntry + pEntry->Header.LenOfEntry);
+	}	
+}
+
+int readCluster(U64 vcn, U32 ClusCnt, RunData * runData, U8 * buf) {
+	U32 i;
+	U32 curVCN = 0;
+	U32 len = 0;
+	U32 bufOffset = 0;
+	U32 readLen = 0, readLCN = 0;
+	U32 readSec = 0, readSecCnt = 0;
+
+	for (i = 0; i < MAX_CLUS_RUN; i++) {
+
+		if (runData[i].Len == 0) return 1;
+
+		if (curVCN == vcn) {
+			readLen = runData[i].Len;
+			readLCN = runData[i].Offset;
+		}
+
+		else if (vcn < runData[i].Len + curVCN) {
+			int temp;
+			temp = vcn - curVCN;
+
+			readLen = runData[i].Len - temp;
+			readLCN = runData[i].Offset + temp;
+
+		}
+		else {
+			curVCN = runData[i].Len + curVCN;
+			continue;
+		}
+	}
+
+	curVCN = runData[i].Len + curVCN;
+
+	readSec = (readLCN * gVol.SecPerClus) + gVol.VolBeginSec;
+
+	if (ClusCnt > readLen) {
+		readSecCnt = readLen * gVol.SecPerClus;
+
+		HDD_read(gVol.Drive, readSec, readSecCnt, (U8*)&buf[bufOffset]);
+
+		bufOffset = bufOffset + (readLen * gVol.ClusSize);
+		vcn = vcn + readLen;
+		ClusCnt = ClusCnt - readLen;
+	}
+	else if (ClusCnt <= readLen) {
+		readSecCnt = ClusCnt * gVol.SecPerClus;
+		HDD_read(gVol.Drive, readSec, readSecCnt, (U8*)&buf[bufOffset]);
+		bufOffset = bufOffset + (ClusCnt * gVol.ClusSize);
+		return 0;
+	}
+}
+
+void ChangetoUpper(char * name) {
+	int i = 0;
+	while (name[i] != 0) name[i++] = toupper(name[i]);
+}
+
+void get_RunList(U8* data, RunData*runData) {
+	int offset = 0;
+	int LenSize;
+	int OffsetSize;
+	int i = 0, runCnt = 0;
+	int prevRunOffset = 0;
+
+	while (data[offset] != 0) {
+		OffsetSize = data[offset] >> 4;
+		LenSize = data[offset++] & 0x0F;
+
+		for(i = 0; LenSize != 0; LenSize--, i += 8) {
+			runData[runCnt].Len |= data[offset++] << i;
+
+			if (OffsetSize == 0) {
+				runData[runCnt].Offset = 0;
+				continue;
+			}
+
+			for (i = 4; i > 0; i--) {
+				runData[runCnt].Offset = runData[runCnt].Offset >> 8;
+
+				if (OffsetSize != 0) {
+					runData[runCnt].Offset = runData[runCnt].Offset & 0x00FFFFFF;
+					runData[runCnt].Offset |= data[offset++] << 24;
+
+					OffsetSize--;
+				}
+			}
+		}
+
+		runData[runCnt].Offset = prevRunOffset + runData[runCnt].Offset;
+		prevRunOffset = runData[runCnt].Offset;
+		runCnt++;
+	}
 }
 
 int get_MFTEntry(int MFTNum, MFTEntry * curMFTEntry) {
